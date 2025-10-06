@@ -1,0 +1,2 @@
+RunID,TimesheetID,Page,Row,Col,FieldKey,RawText,NormalizedTime,Confidence,CropPath,Warnings,_source_file,IsValid
+20251006_155422,clockin_synth,,,,,,,,,json_error:Extra data: line 2 column 1 (char 106); empty; invalid_time,C:\Users\samue\OneDrive\Documents\timesheet-ocr-prototype\data\clockin_synth\ocr_time_results.jsonl,False

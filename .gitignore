@@ -1,3 +1,5 @@
+data/clockin_synth/
+data/clockin_synth.zip/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
