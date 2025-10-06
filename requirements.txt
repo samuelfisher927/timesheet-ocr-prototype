@@ -1,0 +1,15 @@
+# Core utilities
+numpy
+pandas
+pillow
+openpyxl
+tqdm
+
+# Deep learning
+torch
+transformers
+
+# Visualization & debugging
+matplotlib
+seaborn
+
