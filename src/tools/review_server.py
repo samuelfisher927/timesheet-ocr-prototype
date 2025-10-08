@@ -52,14 +52,14 @@ kbd{border:1px solid #bbb;border-bottom-width:2px;border-radius:4px;padding:0 6p
 <h2>OCR Click-to-Correct (<span id="count"></span>) — Tip: <kbd>Enter</kbd> save, <kbd>Ctrl</kbd>+<kbd>→</kbd> next</h2>
 <div class="grid" id="grid"></div>
 <script>
-async function fetchData(){const r=await fetch('/data');return r.json()}
-async function saveOne(item, label){
-  const body={crop_path:item.crop_path, field_type:item.field_type, pred_raw:item.pred_raw, label}
-  const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-  return r.ok
+async function fetchData(){ const r=await fetch('/data'); return r.json(); }
+async function saveOne(item,label){
+  const body={crop_path:item.crop_path, field_type:item.field_type, pred_raw:item.pred_raw, label};
+  const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  return r.ok;
 }
 function cardHTML(item){
-  const fn=item.crop_path.split(/[\\\\/]/).pop()
+  const fn=item.crop_path.split(/[\\\\/]/).pop();
   return `
   <div class="card" data-id="${item.idx}">
     <img src="/crop?path=${encodeURIComponent(item.crop_path)}">
@@ -69,24 +69,41 @@ function cardHTML(item){
     <div class="row">
       <button class="btn save">Save</button>
       <button class="btn skip">Skip</button>
+      <button class="btn empty">Empty</button>
+      <button class="btn ill">Illegible</button>
+      <button class="btn sign">Signature</button>
     </div>
-  </div>`
+  </div>`;
 }
-function wire(card, item, focusFirst){
-  const inp=card.querySelector('input'); const saveBtn=card.querySelector('.save'); const skipBtn=card.querySelector('.skip');
-  async function doSave(){ if(!inp.value.trim()) return; const ok=await saveOne(item, inp.value.trim()); if(ok){ card.remove(); updateCount(); } }
-  saveBtn.onclick=doSave; skipBtn.onclick=()=>{card.remove(); updateCount();}
-  inp.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ doSave() } })
-  if(focusFirst) inp.focus()
+function wire(card,item,focusFirst){
+  const inp=card.querySelector('input');
+  const saveBtn=card.querySelector('.save');
+  const skipBtn=card.querySelector('.skip');
+  const emptyBtn=card.querySelector('.empty');
+  const illBtn=card.querySelector('.ill');
+  const signBtn=card.querySelector('.sign');
+
+  async function doSave(){
+    const ok=await saveOne(item, inp.value.trim());
+    if(ok){ card.remove(); updateCount(); }
+  }
+  saveBtn.onclick=doSave;
+  skipBtn.onclick=()=>{ card.remove(); updateCount(); };
+  emptyBtn.onclick=async ()=>{ inp.value=""; await doSave(); };             // server maps "" -> <EMPTY>
+  illBtn.onclick=async ()=>{ inp.value="<ILLEGIBLE>"; await doSave(); };
+  signBtn.onclick=async ()=>{ inp.value="<SIGNATURE>"; await doSave(); };
+  inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ doSave(); }});
+  if(focusFirst) inp.focus();
 }
-function updateCount(){ document.getElementById('count').textContent = document.querySelectorAll('.card').length + " remaining" }
+function updateCount(){ document.getElementById('count').textContent = document.querySelectorAll('.card').length + " remaining"; }
 (async ()=>{
   const data=await fetchData(); const grid=document.getElementById('grid');
-  data.items.forEach((it,i)=>{ const tmp=document.createElement('div'); tmp.innerHTML=cardHTML(it).trim(); const card=tmp.firstChild; grid.appendChild(card); wire(card,it,i===0) })
+  data.items.forEach((it,i)=>{ const tmp=document.createElement('div'); tmp.innerHTML=cardHTML(it).trim(); const card=tmp.firstChild; grid.appendChild(card); wire(card,it,i===0); });
   updateCount();
-  window.addEventListener('keydown',e=>{ if(e.ctrlKey && e.key==='ArrowRight'){ const first=document.querySelector('.card'); if(first){ first.remove(); updateCount(); } }})
+  window.addEventListener('keydown', e=>{ if(e.ctrlKey && e.key==='ArrowRight'){ const first=document.querySelector('.card'); if(first){ first.remove(); updateCount(); } }});
 })();
 </script>""", mimetype="text/html")
+
 
 @app.route("/data")
 def data():
@@ -112,14 +129,19 @@ def crop():
         return "forbidden", 403
     return send_from_directory(os.path.dirname(abspath), os.path.basename(abspath))
 
+
 @app.route("/save", methods=["POST"])
 def save():
     data = request.get_json(force=True)
+    label = (data.get("label") or "").strip()
+    if label == "":
+        label = "<EMPTY>"   # <-- allow blank saves
+
     row = {
         "crop_path": data["crop_path"],
         "field_type": data["field_type"],
         "pred_raw": data.get("pred_raw",""),
-        "label": data.get("label",""),
+        "label": label,
         "reviewer": os.environ.get("REVIEWER","sam"),
         "ts": int(time.time())
     }
@@ -127,3 +149,10 @@ def save():
         w = csv.DictWriter(f, fieldnames=["crop_path","field_type","pred_raw","label","reviewer","ts"])
         w.writerow(row)
     return jsonify({"ok": True})
+
+if __name__ == "__main__":
+    host  = os.getenv("HOST", "127.0.0.1")
+    port  = int(os.getenv("PORT", "5000"))
+    debug = os.getenv("FLASK_DEBUG", "0").lower() not in ("0", "false", "")
+    app.run(host=host, port=port, debug=debug)
+
