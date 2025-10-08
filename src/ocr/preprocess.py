@@ -44,10 +44,11 @@ def _estimate_skew_angle(img_bin: np.ndarray) -> float:
     if not rects:
         return 0.0
 
-    # Robust average (median) to reduce outliers
+    # Clamp to a very small correction; big rotations often come from box edges
     angle = float(np.median(rects))
-    # Clamp to a reasonable range
-    angle = max(min(angle, 20.0), -20.0)
+    if abs(angle) < 0.5:
+        angle = 0.0
+    angle = max(min(angle, 5.0), -5.0)
     return angle
 
 def _rotate(image: np.ndarray, angle_deg: float) -> np.ndarray:
