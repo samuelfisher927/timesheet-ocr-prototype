@@ -27,12 +27,16 @@ def infer_time_fields(crops_dir: str, out_json: str):
     results: List[Dict] = []
 
     # gather all time crops
+    # gather all time crops (accept any images recursively)
     time_crops = []
+    def _is_img(fn: str) -> bool:
+        return fn.lower().endswith((".png", ".jpg", ".jpeg"))
+
     for root, _, files in os.walk(crops_dir):
-        if os.path.basename(root) == "time":
-            for fn in files:
-                if fn.lower().endswith(".png"):
-                    time_crops.append(os.path.join(root, fn))
+        for fn in files:
+            if _is_img(fn):
+                time_crops.append(os.path.join(root, fn))
+
 
     print(f"[info] Found {len(time_crops)} time crops.")
     for path in tqdm(time_crops, desc="OCR"):
