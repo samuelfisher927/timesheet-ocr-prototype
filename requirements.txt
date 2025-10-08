@@ -13,3 +13,4 @@ transformers
 matplotlib
 seaborn
 
+opencv-python-headless>=4.10.0
