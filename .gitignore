@@ -1,3 +1,31 @@
+# build artifacts / caches
+__pycache__/
+*.pyc
+*.pyo
+*.DS_Store
+
+# data & outputs
+exports/
+runs/
+*.jsonl
+*.csv
+
+# assets you don’t want in git
+assets/fonts/**
+assets/fonts_ui/**
+assets/templates/**
+
+# notebooks checkpoints
+.ipynb_checkpoints/
+
+# venvs
+.venv/
+venv/
+
+
+
+content.pdf/
+src.zip/
 data/clockin_synth/
 data/clockin_synth.zip/
 # Byte-compiled / optimized / DLL files
