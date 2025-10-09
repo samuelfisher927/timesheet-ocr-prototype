@@ -3,7 +3,7 @@ from __future__ import annotations
 import os, json, math, csv, base64, io
 from typing import Literal, List, Tuple, Dict
 from PIL import Image, ImageOps, ImageDraw, ImageFont
-
+import html as html_mod
 from src.ocr.normalizers import sanitize_amount, sanitize_time
 
 FieldType = Literal["time","amount","text"]
@@ -14,7 +14,7 @@ def is_valid_time(v: str) -> bool:
 
 def is_valid_amount(v: str) -> bool:
     import re
-    return bool(re.match(r"^-?\d+(?:\.\d{2})$", v))
+    return bool(re.match(r"^\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})$", v))
 
 def postprocess_field(raw: str, field_type: FieldType) -> Tuple[str, bool, bool]:
     if field_type == "time":
@@ -76,6 +76,12 @@ def build_review(
     for r in data:
         crop_path = r["crop_path"]
         pred_raw  = (r.get("pred_time") or r.get("pred_text") or "").strip()
+        # display only 
+        display_pred = (r.get("pred_text_sanitized") or pred_raw).strip()
+
+        # badge to let users know that the text differs from raw model by being cleaned (doesn't affect confidence logic)
+        auto_cleaned = display_pred != pred_raw
+        
 
         # Confidence: use beams if present, else 1.0 for the only string
         cands = r.get("candidates") or [pred_raw]
@@ -97,6 +103,7 @@ def build_review(
         rows_csv.append({
             "crop_path": crop_path,
             "pred_raw": pred_raw,
+            "display_pred": display_pred,
             "clean": clean,
             "sanitized": int(sanitized),
             "valid": int(valid),
@@ -106,17 +113,21 @@ def build_review(
         })
 
         # HTML card
+        safe_display = html_mod.escape(display_pred)
+        safe_clean = html_mod.escape(clean)
+
         try:
             img = thumb(crop_path)
             img_uri = to_data_uri(img)
         except Exception:
             img_uri = ""
         tag = "⚠️ Review" if needs_review else "✅ OK"
+        badge_html = '<span class="badge">auto-cleaned</span>' if auto_cleaned else ''
         cards_html.append(f"""
 <div class="card {'need' if needs_review else 'ok'}">
   <img src="{img_uri}" />
   <div class="meta"><code>{os.path.basename(crop_path)}</code></div>
-  <div class="pred">raw: <b>{pred_raw}</b><br/>clean: <b>{clean}</b></div>
+  <div class="pred">raw: <b>{safe_display}</b> {badge_html}<br/>clean: <b>{safe_clean}</b></div>
   <div class="conf">conf: {final_conf:.2f} ({'sanitized' if sanitized else 'raw'} | {'valid' if valid else 'invalid'})</div>
   <div class="flag">{tag}</div>
 </div>""")
@@ -129,7 +140,7 @@ def build_review(
             w.writerow(row)
 
     # Write HTML gallery
-    html = f"""<!doctype html>
+    html_doc = f"""<!doctype html>
 <html><head>
 <meta charset="utf-8"/>
 <title>OCR Review</title>
@@ -144,6 +155,9 @@ body {{ font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Aria
 .pred {{ font-size: 14px; }}
 .conf {{ color:#333; font-size: 13px; margin-top:4px; }}
 .flag {{ margin-top:6px; font-weight:600; }}
+.badge {{display: inline-block;background: #eef; color: #225; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; margin-left: 4px; border: 1px solid #ccd;
+}}
+
 </style>
 </head>
 <body>
@@ -153,7 +167,7 @@ body {{ font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Aria
 </div>
 </body></html>"""
     with open(out_html, "w", encoding="utf-8") as f:
-        f.write(html)
+        f.write(html_doc)
 
 if __name__ == "__main__":
     import argparse
