@@ -1,3 +1,35 @@
+# virtual envs
+.venv/
+venv/
+env/
+timesheet_ocr_env/
+
+# python build / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.dist/
+build/
+.cache/
+
+# notebooks & checkpoints
+.ipynb_checkpoints/
+
+# data & outputs
+data/**/*.zip
+exports/**
+outputs/**
+models/**
+
+# local configs
+*.local.yaml
+.env
+
+# IDE
+.vscode/
+.idea/
+
+
 # build artifacts / caches
 __pycache__/
 *.pyc
