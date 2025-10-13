@@ -41,12 +41,14 @@ def run_pipeline(image_path: str, yolo_weights: str, out_dir: str,
 
     # 2) Grid-snap (map to (row, col))
     grid = snap_to_grid(
-        detections=dets,
-        table_top=MARGIN_T + HEADER_GAP,
-        row_h=HEADER_ROW_H,
-        n_rows_total=ROWS_DATA,
-        x0=MARGIN_L,
-        col_widths=[w for _,_,w in COLS],
+    detections=dets,
+    table_top=MARGIN_T + HEADER_GAP,   # top of first header band
+    row_h=HEADER_ROW_H,
+    n_rows_total=ROWS_DATA,
+    x0=MARGIN_L,
+    col_widths=[w for _,_,w in COLS],
+    class_names=[c[0] for c in COLS],
+    header_rows=2,                     # ← skip typed label rows
     )
 
     # 3) Crop + OCR route (stubbed here; integrate your TrOCR call)
