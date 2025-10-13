@@ -243,3 +243,11 @@ __pycache__/
 *.pyc
 .venv/
 timesheet_ocr_env/
+
+# Artifacts
+runs/**
+exports/**
+models/*.pt
+yolo*.pt
+*.zip
+*.pdf
