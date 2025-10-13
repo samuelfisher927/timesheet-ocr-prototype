@@ -4,43 +4,47 @@ from typing import List, Tuple, Literal
 import math
 import re
 
-# Use your existing normalizers
-from src.ocr.normalizers import sanitize_amount, sanitize_time
+# Normalizers
+from src.ocr.normalizers import sanitize_amount, sanitize_time, sanitize_date
 
-FieldType = Literal["amount", "time", "text"]
+FieldType = Literal["amount", "time", "text", "date"]
 
-# Quick character-level prefilters to down-weight obviously-wrong beams
+# Character prefilters to down-weight obviously wrong beams
 AMOUNT_PREFILTER_RX = re.compile(r"^[()\-$\s\d.,]+$")
 TIME_PREFILTER_RX   = re.compile(r"^[\s0-9:;.,\-apmAPM]+$")
+DATE_PREFILTER_RX   = re.compile(r"^[\s0-9/.\-]+$")  # e.g., 01/23/2025, 1-2-25, 1.2.2025
 
 def is_valid_amount(s: str) -> bool:
-    """True if amount parses cleanly via sanitize_amount."""
     return sanitize_amount(s) is not None
 
 def is_valid_time(s: str) -> bool:
-    """True if time parses cleanly via sanitize_time."""
     return sanitize_time(s) is not None
 
+def is_valid_date(s: str) -> bool:
+    return sanitize_date(s) is not None
+
 def _normalize_text(s: str) -> str:
-    # Collapse whitespace, strip edges
-    return re.sub(r"\s+", " ", s or "").strip()
+    # collapse whitespace, strip edges
+    return re.sub(r"\s+", " ", (s or "")).strip()
 
 def postprocess_field(s: str, kind: FieldType) -> Tuple[str, bool]:
     """
-    Returns (clean_string, sanitized_ok).
-    - amount: normalized string if parseable else original-stripped
-    - time:   normalized string if parseable else original-stripped
-    - text:   whitespace-normalized
+    Normalize field text and report if sanitizer succeeded.
+      - amount/time/date -> (sanitized, True) if valid else (whitespace-normalized, False)
+      - text             -> (whitespace-normalized, True)  (no strict validation)
     """
-    raw_norm = _normalize_text(s)
+    raw = _normalize_text(s)
     if kind == "amount":
-        v = sanitize_amount(raw_norm)
-        return (v if v is not None else raw_norm, v is not None)
+        clean = sanitize_amount(raw)
+        return (clean, True) if clean is not None else (raw, False)
     if kind == "time":
-        v = sanitize_time(raw_norm)
-        return (v if v is not None else raw_norm, v is not None)
+        clean = sanitize_time(raw)
+        return (clean, True) if clean is not None else (raw, False)
+    if kind == "date":
+        clean = sanitize_date(raw)
+        return (clean, True) if clean is not None else (raw, False)
     # text
-    return (raw_norm, bool(raw_norm))
+    return raw, True
 
 def _levenshtein(a: str, b: str) -> int:
     """Tiny Levenshtein to gently penalize messy outputs."""
@@ -51,9 +55,9 @@ def _levenshtein(a: str, b: str) -> int:
     for i, ca in enumerate(a, start=1):
         curr = [i]
         for j, cb in enumerate(b, start=1):
-            ins = prev[j] + 1
+            ins  = prev[j] + 1
             dele = curr[j - 1] + 1
-            sub = prev[j - 1] + (ca != cb)
+            sub  = prev[j - 1] + (ca != cb)
             curr.append(min(ins, dele, sub))
         prev = curr
     return prev[-1]
@@ -63,22 +67,24 @@ def _prefilter_ok(s: str, field_type: FieldType) -> bool:
         return bool(AMOUNT_PREFILTER_RX.match(s))
     if field_type == "time":
         return bool(TIME_PREFILTER_RX.match(s))
-    return True  # for text
+    if field_type == "date":
+        return bool(DATE_PREFILTER_RX.match(s))
+    return True  # text
 
 def rescore_candidates(
     candidates: List[str],
     seq_logprobs: List[float],
-    field_type: FieldType
+    field_type: FieldType,
+    length_bias: float = 0.0,   # small positive favors shorter strings; keep 0.0 to disable
 ) -> Tuple[str, List[Tuple[str, float, str]]]:
     """
-    Given n-best candidates and their sequence logprobs, return:
-      - best_raw (string picked from candidates)
-      - debug list of (candidate, score, note)
+    Return best string + debug details [(cand, score, note), ...].
     Score = model_logprob
             + bonus if sanitizer succeeds
-            + bonus if regex/validator passes
-            - small penalty proportional to edit distance (raw vs clean)
+            + bonus if validator passes (amount/time/date)
+            - small penalty for edit distance (raw vs clean)
             - penalty if prefilter fails
+            + (optional) short-length bias
     """
     assert len(candidates) == len(seq_logprobs)
     rescored: List[Tuple[str, float, str]] = []
@@ -87,34 +93,45 @@ def rescore_candidates(
         score = float(logp) if math.isfinite(logp) else -1e9
         note_bits = []
 
-        # 0) Prefilter penalty for illegal character sets
-        if not _prefilter_ok(cand, field_type):
-            score -= 2.0
+        raw_norm = _normalize_text(cand)
+
+        # 0) prefilter characters
+        if not _prefilter_ok(raw_norm, field_type):
+            # a tad stronger on amounts (commonly polluted)
+            score -= 3.0 if field_type == "amount" else 2.0
             note_bits.append("prefilter_fail")
 
-        # 1) Postprocess via normalizers (clean + success flag)
-        clean, sanitized = postprocess_field(cand, field_type)
+        # 1) sanitize/normalize
+        clean, sanitized = postprocess_field(raw_norm, field_type)
         if sanitized:
             score += 2.0
             note_bits.append("sanitized_ok")
 
-        # 2) Validators on the CLEAN string
+        # 2) validators on clean
         if field_type == "amount" and is_valid_amount(clean):
             score += 1.5
             note_bits.append("amount_valid")
         elif field_type == "time" and is_valid_time(clean):
             score += 1.5
             note_bits.append("time_valid")
+        elif field_type == "date" and is_valid_date(clean):
+            score += 1.5
+            note_bits.append("date_valid")
 
-        # 3) Gentle distance penalty between raw and clean
-        dist = _levenshtein(_normalize_text(cand), clean)
+        # 3) gentle distance penalty (compare raw vs *clean*)
+        dist = _levenshtein(raw_norm, clean)
         score -= 0.05 * dist
         if dist:
             note_bits.append(f"lev-{dist}")
 
+        # 4) optional short-length bias
+        if length_bias:
+            score += length_bias * (-len(raw_norm))
+            note_bits.append(f"len_bias({length_bias})")
+
         rescored.append((cand, score, ",".join(note_bits) if note_bits else "ok"))
 
-    # Pick best by score; if tie, prefer shorter normalized form
+    # pick best by (score desc, length asc)
     rescored.sort(key=lambda t: (t[1], -len(_normalize_text(t[0]))), reverse=True)
     best_raw = rescored[0][0]
     return best_raw, rescored

@@ -7,8 +7,7 @@ from tqdm import tqdm
 import torch
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from src.ocr.normalizers import sanitize_amount, sanitize_time
-
-
+from src.ocr.beam_filter import rescore_candidates  # <-- use your beam filter
 
 def load_model(device: str | None = None):
     """
@@ -21,17 +20,46 @@ def load_model(device: str | None = None):
     model.eval()
     return processor, model, device
 
-
 def _is_img(fn: str) -> bool:
     return fn.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"))
 
+def _approx_seq_logprob(
+    seqs: torch.LongTensor,
+    scores: List[torch.FloatTensor],
+    eos_token_id: int | None = None,
+) -> List[float]:
+    """
+    Heuristic: with return_dict_in_generate=True and output_scores=True,
+    `scores` is a list[t] of logits. Approximate per-sequence logprob
+    by summing gathered log-softmax at chosen token ids.
+    If eos_token_id is provided, stop accumulation at first EOS per sequence.
+    """
+    # scores: List[batch_logits_t], each [batch*nbest, vocab]
+    # seqs: [batch*nbest, T]
+    B = seqs.size(0)
+    done = [False] * B
+    logprobs = [0.0] * B
 
-def _score_nbest(
+    with torch.no_grad():
+        for t, logits in enumerate(scores):
+            lsm = torch.log_softmax(logits, dim=-1)  # [B, V]
+            tok = seqs[:, t]                          # [B]
+            step_lp = lsm.gather(1, tok.view(-1, 1)).squeeze(1)  # [B]
+            for i in range(B):
+                if not done[i]:
+                    logprobs[i] += float(step_lp[i].item())
+                    if eos_token_id is not None and int(tok[i].item()) == eos_token_id:
+                        done[i] = True
+            if all(done):
+                break
+    return logprobs
+
+def _score_nbest_local(
     candidates: List[Tuple[str, float]],
     field_hint: str | None = None,
 ) -> Tuple[str, str, float]:
     """
-    Rescore n-best using your existing sanitizers as validity checks.
+    Lightweight local rescoring (kept for parity with your original).
     Returns (best_text, best_sanitized, best_score).
     """
     best = None
@@ -40,19 +68,15 @@ def _score_nbest(
         compact = raw.replace(" ", "")
         bonus = 0.0
 
-        # Use your sanitizers as signals that the candidate parses/normalizes cleanly
         if field_hint == "time":
             san = sanitize_time(compact)
-            if san:
-                bonus += 1.0
+            if san: bonus += 1.0
         elif field_hint == "amount":
             san = sanitize_amount(compact)
-            if san:
-                bonus += 1.0
+            if san: bonus += 1.0
         else:
             san = compact
 
-        # Light penalties for obvious garbage
         if ".." in compact or ",," in compact:
             bonus -= 0.5
         if field_hint in ("time", "amount") and re.search(r"[A-Za-z]", compact):
@@ -66,37 +90,14 @@ def _score_nbest(
     assert best is not None
     return best
 
-
-def _approx_seq_logprob(seqs: torch.LongTensor, scores: torch.FloatTensor) -> List[float]:
-    """
-    Heuristic: when return_dict_in_generate=True and output_scores=True,
-    scores is a list[timestep] of logits. We approximate per-sequence logprob
-    using gathered token log-softmax. This is an approximation but works for ranking.
-    """
-    # scores: List[batch_logits_t], each [batch*nbest, vocab]
-    # seqs: [batch*nbest, seq_len]
-    # We skip the first token (usually BOS) for scoring clarity.
-    logprobs = [0.0] * seqs.size(0)
-    with torch.no_grad():
-        # Convert logits to log-softmax per timestep
-        for t, logits in enumerate(scores):
-            lsm = torch.log_softmax(logits, dim=-1)
-            tok = seqs[:, t]  # token chosen at this step
-            step_lp = lsm.gather(1, tok.view(-1, 1)).squeeze(1)  # [batch*nbest]
-            # Sum into running totals
-            for i in range(seqs.size(0)):
-                # Ignore padding (id == -100 in some settings). Here, seqs should be generated ids, so >=0.
-                logprobs[i] += float(step_lp[i].item())
-    return logprobs
-
-
 def infer_time_fields(
     crops_dir: str,
     out_json: str,
     num_beams: int = 5,
     nbest: int = 5,
     max_new_tokens: int = 64,
-    field_hint: str = "time",  # use "amount" if you’re running this on amounts later
+    field_hint: str = "time",  # "time" | "amount" | "text"
+    use_beam_filter: bool = True,
 ):
     """
     Run OCR on all crops under crops_dir.
@@ -124,6 +125,8 @@ def infer_time_fields(
         return_dict_in_generate=True,
     )
 
+    eos_id = getattr(processor.tokenizer, "eos_token_id", None)
+
     for path in tqdm(crop_paths, desc="OCR"):
         img = Image.open(path).convert("RGB")
         pixel_values = processor(images=img, return_tensors="pt").pixel_values.to(device)
@@ -131,20 +134,26 @@ def infer_time_fields(
         with torch.no_grad():
             out = model.generate(pixel_values, **gen_kwargs)
 
-        # out.sequences: [nbest, T], out.scores: list of length T (logits per step)
-        # Decode all
         texts = processor.batch_decode(out.sequences, skip_special_tokens=True)
 
-        # Approximate per-sequence logprobs for rescoring
-        # Note: scores is per-step over full batch; here batch=1 so nbest dimension only.
-        seq_logps = _approx_seq_logprob(out.sequences, out.scores)
+        # Approximate per-sequence logprobs for rescoring (EOS-aware)
+        seq_logps = _approx_seq_logprob(out.sequences, out.scores, eos_token_id=eos_id)
 
-        nbest_list = []
-        for t, lp in zip(texts, seq_logps):
-            nbest_list.append({"text": t, "logprob": lp})
+        # Prepare n-best
+        nbest_list = [{"text": t, "logprob": lp} for t, lp in zip(texts, seq_logps)]
+        candidates = [x["text"] for x in nbest_list]
+        candidate_logprobs = [x["logprob"] for x in nbest_list]
 
-        # Choose best with simple field-aware rescoring
-        best_text, _, best_score = _score_nbest([(x["text"], x["logprob"]) for x in nbest_list], field_hint=field_hint)
+        # Choose best: prefer your stricter beam_filter (sanitizer + validators)
+        if use_beam_filter:
+            field_map = {"time": "time", "amount": "amount"}
+            ft = field_map.get(field_hint, "text")
+            best_text, _debug = rescore_candidates(candidates, candidate_logprobs, ft)
+            # (Optional) keep _debug if you want per-beam notes – omitted in JSON to keep it smaller
+        else:
+            best_text, _, _ = _score_nbest_local([(x["text"], x["logprob"]) for x in nbest_list], field_hint=field_hint)
+
+        # Final sanitizer for the chosen field
         if field_hint == "time":
             best_sanitized = sanitize_time(best_text) or best_text.strip()
         elif field_hint == "amount":
@@ -152,18 +161,14 @@ def infer_time_fields(
         else:
             best_sanitized = best_text.strip()
 
-        candidates = [x["text"] for x in nbest_list]
-        candidate_logprobs = [x["logprob"] for x in nbest_list]
-        
         results.append({
             "crop_path": path,
             "pred_text": best_text,
             "pred_text_sanitized": best_sanitized,
-            "score": best_score,
-            "nbest": nbest_list,
-            "candidates": candidates,                     # <-- add
-            "candidate_logprobs": candidate_logprobs,     # <-- add
-            "nbest": nbest_list                           # keep if you still want the rich form
+            "score": max(candidate_logprobs) if candidate_logprobs else float("-inf"),
+            "candidates": candidates,
+            "candidate_logprobs": candidate_logprobs,
+            "nbest": nbest_list  # <-- keep single, non-duplicated key
         })
 
     with open(out_json, "w", encoding="utf-8") as f:
@@ -171,7 +176,6 @@ def infer_time_fields(
             f.write(json.dumps(r) + "\n")
 
     print(f"[done] OCR results saved to {out_json}")
-
 
 if __name__ == "__main__":
     import argparse
@@ -183,6 +187,8 @@ if __name__ == "__main__":
     ap.add_argument("--max_new_tokens", type=int, default=64)
     ap.add_argument("--field_hint", choices=["time", "amount", "text"], default="time",
                     help="Lightweight rescoring hint; does not change model, only n-best ranking.")
+    ap.add_argument("--no_beam_filter", action="store_true",
+                    help="Disable strict beam_filter rescoring and use local scorer instead.")
     args = ap.parse_args()
 
     infer_time_fields(
@@ -192,4 +198,5 @@ if __name__ == "__main__":
         nbest=args.nbest,
         max_new_tokens=args.max_new_tokens,
         field_hint=args.field_hint,
+        use_beam_filter=not args.no_beam_filter,
     )

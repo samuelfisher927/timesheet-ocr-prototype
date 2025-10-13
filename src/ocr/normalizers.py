@@ -83,3 +83,18 @@ def sanitize_time(raw: str) -> str | None:
     if 0 <= hh <= 23 and 0 <= mm <= 59:
         return f"{hh:02d}:{mm:02d}"
     return None
+
+# src/ocr/normalizers.py
+import re
+def sanitize_date(s: str):
+    s = s.strip()
+    # unify separators
+    s = s.replace("-", "/").replace(".", "/")
+    m = re.match(r"^\s*(\d{1,2})/(\d{1,2})/(\d{2,4})\s*$", s)
+    if not m:
+        return None
+    mm, dd, yy = map(int, m.groups())
+    if yy < 100: yy += 2000  # 24 -> 2024
+    if not (1 <= mm <= 12 and 1 <= dd <= 31 and 2000 <= yy <= 2100):
+        return None
+    return f"{mm:02d}/{dd:02d}/{yy:04d}"

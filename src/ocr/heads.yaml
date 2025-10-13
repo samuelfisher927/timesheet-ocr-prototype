@@ -1,0 +1,16 @@
+# src/ocr/heads.yaml
+time:
+  model_id: microsoft/trocr-base-handwritten
+  ckpt_path: exports/ckpts/tr_time_merged   # <- merged full model (recommended for simple loading)
+
+amount:
+  model_id: microsoft/trocr-base-handwritten
+  ckpt_path: null
+
+text:
+  model_id: microsoft/trocr-base-handwritten
+  ckpt_path: null
+
+date:
+  model_id: microsoft/trocr-base-handwritten
+  ckpt_path: <PATH_TO_YOUR_NOTEBOOK_FINETUNE>  # reuse your already-finetuned date model here
