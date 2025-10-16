@@ -9,6 +9,8 @@ from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from src.ocr.beam_filter import rescore_candidates
 from src.ocr.normalizers import sanitize_time, sanitize_amount, sanitize_date
 from src.ocr.signature_presence import signature_present
+import numpy as np
+import cv2
 
 FieldType = str  # "time" | "amount" | "text" | "date"
 Device = "cuda" if torch.cuda.is_available() else "cpu"
