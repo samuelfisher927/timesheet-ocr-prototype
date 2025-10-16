@@ -7,7 +7,8 @@ openpyxl>=3.1
 pyyaml>=6.0
 
 # ---------- Vision / CV ----------
-opencv-python>=4.10.0
+opencv-python>=4.10.0           # local dev with imshow windows
+# opencv-python-headless>=4.10.0  # servers/CI, no GUI
 matplotlib>=3.8
 seaborn>=0.13
 scipy>=1.11            # for Hungarian matching in grid_snap
@@ -16,10 +17,10 @@ scipy>=1.11            # for Hungarian matching in grid_snap
 # Install torch that matches your CUDA; see note below.
 torch                   # pinned by environment (see install note)
 transformers==4.40.*    # matches the logs you’re running with
-accelerate>=0.28.0      # used by Trainer path; safe to keep even if "min" script
-peft>=0.10.0,<0.12      # LoRA adapters compatible with transformers 4.40
+accelerate>=0.27,<0.30   # used by Trainer path; safe to keep even if "min" script
+peft==0.11.*     # LoRA adapters compatible with transformers 4.40
 safetensors>=0.4.3
-huggingface_hub>=0.23.0
+huggingface_hub>=0.24
 
 # ---------- Metrics (optional but recommended) ----------
 evaluate>=0.4.1         # for CER metric

@@ -1,7 +1,7 @@
 # src/ocr/heads.yaml
 time:
   model_id: microsoft/trocr-base-handwritten
-  ckpt_path: exports/ckpts/tr_time_merged    # once your time model is merged
+  ckpt_path: exports/ckpts/tr_time_merged    # merged full model (epoch 5 best)
 
 amount:
   model_id: microsoft/trocr-base-handwritten
