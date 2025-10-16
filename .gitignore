@@ -1,3 +1,16 @@
+# runs & checkpoints
+exports/ckpts/
+outputs/
+exports/yolo/**/labels/
+exports/datasets/**/crops/
+*.pt
+*.bin
+*.safetensors
+*.ckpt
+
+# IDE
+.vscode/
+
 # virtual envs
 .venv/
 venv/
